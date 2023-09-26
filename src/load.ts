@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 import { maxSatisfying } from 'semver';
-import tar, {Pack} from 'tar';
+import tar, { Pack } from 'tar';
 import temp from 'temp';
 import {
   PackageLoadError,
@@ -18,10 +18,13 @@ import { LatestVersionUnavailableError } from './errors/LatestVersionUnavailable
 
 class PackageCache {
   public static lastCurrentUpdate: Date;
-  private static cache: {[pkg: string]: LoadedPackage} = {};
+  private static cache: { [pkg: string]: LoadedPackage } = {};
 
   public static isCurrentPackageRefreshNeeded(): boolean {
-    return !PackageCache.lastCurrentUpdate || PackageCache.lastCurrentUpdate.getTime() - new Date().getTime() > 86400000;
+    return (
+      !PackageCache.lastCurrentUpdate ||
+      PackageCache.lastCurrentUpdate.getTime() - new Date().getTime() > 86400000
+    );
   }
 
   public static markCurrentPackageRefreshed(): void {
@@ -30,16 +33,15 @@ class PackageCache {
 
   static contains(pkg: string): boolean {
     return !!this.cache[pkg];
-  };
+  }
 
   static get(pkg: string): LoadedPackage {
     return this.cache[pkg];
-  };
+  }
 
   static put(pkg: string, loadedPackage: LoadedPackage): void {
     this.cache[pkg] = loadedPackage;
-  };
-
+  }
 }
 
 class LoadedPackage {
@@ -219,7 +221,7 @@ export async function mergeDependency(
 
       // Even if a local current package is loaded, we must still check that the local package date matches
       // the date on the most recent version on build.fhir.org. If the date does not match, we re-download to the cache
-      type QAEntry = {'package-id': string; date: string; repo: string};
+      type QAEntry = { 'package-id': string; date: string; repo: string };
       const baseUrl = 'https://build.fhir.org/ig';
       const res = await axiosGet(`${baseUrl}/qas.json`);
       const qaData: QAEntry[] = res?.data;
@@ -228,7 +230,9 @@ export async function mergeDependency(
       if (qaData?.length > 0) {
         let matchingPackages = qaData.filter(p => p['package-id'] === packageName);
         if (branch == null) {
-          matchingPackages = matchingPackages.filter(p => p.repo.match(/\/(master|main)\/qa\.json$/));
+          matchingPackages = matchingPackages.filter(p =>
+            p.repo.match(/\/(master|main)\/qa\.json$/)
+          );
         } else {
           matchingPackages = matchingPackages.filter(p => p.repo.endsWith(`/${branch}/qa.json`));
         }
@@ -381,10 +385,7 @@ export function cleanCachedPackage(packageDirectory: string): void {
  * @param {string} targetPackage - The name of the package we are trying to load
  * @returns {FHIRDefinitions} loaded package definitions
  */
-export function loadFromPath(
-  cachePath: string,
-  targetPackage: string
-): LoadedPackage {
+export function loadFromPath(cachePath: string, targetPackage: string): LoadedPackage {
   if (PackageCache.contains(targetPackage)) {
     return PackageCache.get(targetPackage);
   }
@@ -398,7 +399,9 @@ export function loadFromPath(
   fs.readdirSync(path.join(cachePath, cachedPackage, 'package'))
     .filter(file => file.endsWith('.json'))
     .forEach(file => {
-      const def = JSON.parse(fs.readFileSync(path.join(cachePath, cachedPackage, 'package', file), 'utf-8').trim());
+      const def = JSON.parse(
+        fs.readFileSync(path.join(cachePath, cachedPackage, 'package', file), 'utf-8').trim()
+      );
       result.defs.push(def);
       if (file === 'package.json') {
         result.packageJson = def;
