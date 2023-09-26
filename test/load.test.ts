@@ -10,6 +10,7 @@ import {
   cleanCachedPackage,
   loadFromPath,
   mergeDependency,
+  merge,
   loadDependencies,
   loadDependency,
   lookUpLatestVersion,
@@ -135,7 +136,10 @@ describe('#loadFromPath()', () => {
   beforeAll(() => {
     defs = new FHIRDefinitions();
     defsWithChildDefs = new FHIRDefinitions();
-    loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'r4-definitions', defs);
+    const pkg = loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'r4-definitions');
+    pkg.defs.forEach(d => defs.add(d));
+    defs.addPackageJson(pkg.package, pkg.packageJson);
+    defs.package = pkg.package;
     defs.fishForFHIR('Condition');
     defs.fishForFHIR('boolean');
     defs.fishForFHIR('Address');
@@ -760,7 +764,7 @@ describe('#mergeDependency()', () => {
   // Packages with numerical versions
   it('should not try to download a non-current package that is already in the cache', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test#0.1.0', expectedDefs);
+    merge(loadFromPath(cachePath, 'sushi-test#0.1.0'), expectedDefs);
     await expect(mergeDependency('sushi-test', '0.1.0', defs, cachePath, log)).resolves.toEqual(
       expectedDefs
     );
@@ -769,7 +773,7 @@ describe('#mergeDependency()', () => {
 
   it('should recognize a package in the cache with uppercase letters', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test-caps#0.1.0', expectedDefs);
+    merge(loadFromPath(cachePath, 'sushi-test-caps#0.1.0'), expectedDefs);
     await expect(
       mergeDependency('sushi-test-caps', '0.1.0', defs, cachePath, log)
     ).resolves.toEqual(expectedDefs);
@@ -928,7 +932,7 @@ describe('#mergeDependency()', () => {
   // Packages with current versions
   it('should not try to download a current package that is already in the cache and up to date', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test#current', expectedDefs);
+    merge(loadFromPath(cachePath, 'sushi-test#current'), expectedDefs);
     await expect(mergeDependency('sushi-test', 'current', defs, cachePath, log)).resolves.toEqual(
       expectedDefs
     );
@@ -940,7 +944,7 @@ describe('#mergeDependency()', () => {
 
   it('should not try to download a current$branch package that is already in the cache and up to date', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test#current$testbranch', expectedDefs);
+    merge(loadFromPath(cachePath, 'sushi-test#current$testbranch'), expectedDefs);
     await expect(
       mergeDependency('sushi-test', 'current$testbranch', defs, cachePath, log)
     ).resolves.toEqual(expectedDefs);
@@ -1048,7 +1052,7 @@ describe('#mergeDependency()', () => {
 
   it('should revert to an old locally cached current version when a newer current version is not available for download', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test-no-download#current', expectedDefs);
+    loadFromPath(cachePath, 'sushi-test-no-download#current');
     await expect(
       mergeDependency('sushi-test-no-download', 'current', defs, cachePath, log)
     ).resolves.toEqual(expectedDefs);
@@ -1063,7 +1067,7 @@ describe('#mergeDependency()', () => {
   // Packages with dev versions
   it('should not try to download a dev package that is already in the cache', async () => {
     const expectedDefs = new FHIRDefinitions();
-    loadFromPath(cachePath, 'sushi-test#dev', expectedDefs);
+    loadFromPath(cachePath, 'sushi-test#dev');
     await expect(mergeDependency('sushi-test', 'dev', defs, cachePath, log)).resolves.toEqual(
       expectedDefs
     );

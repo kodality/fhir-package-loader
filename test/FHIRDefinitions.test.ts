@@ -1,5 +1,5 @@
 import path from 'path';
-import { loadFromPath } from '../src/load';
+import { loadFromPath, merge } from '../src/load';
 import { FHIRDefinitions, Type } from '../src/FHIRDefinitions';
 import { loggerSpy } from './testhelpers';
 
@@ -7,7 +7,7 @@ describe('FHIRDefinitions', () => {
   let defs: FHIRDefinitions;
   beforeAll(() => {
     defs = new FHIRDefinitions();
-    loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'r4-definitions', defs);
+    merge(loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'r4-definitions'), defs);
   });
 
   beforeEach(() => {
@@ -332,17 +332,17 @@ describe('FHIRDefinitions', () => {
 
       // package1 does not contain a Condition resource
       const childDefs1 = new FHIRDefinitions();
-      loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package1', childDefs1);
+      merge(loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package1'), childDefs1);
       childDefs1.package = 'package1';
 
       // package2 contains a Condition resource with version 4.0.2
       const childDefs2 = new FHIRDefinitions();
-      loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package2', childDefs2);
+      merge(loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package2'), childDefs2);
       childDefs2.package = 'package2';
 
       // package3 contains a Condition resource with version 4.0.3
       const childDefs3 = new FHIRDefinitions();
-      loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package3', childDefs3);
+      merge(loadFromPath(path.join(__dirname, 'testhelpers', 'testdefs'), 'package3'), childDefs3);
       childDefs3.package = 'package3';
 
       // childDefs1 and childDefs2 are siblings, childDef3 is child of childDef1

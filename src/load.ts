@@ -348,9 +348,7 @@ export async function mergeDependency(
     throw new PackageLoadError(fullPackageName, getCustomRegistry());
   }
 
-  loadedPackage.defs.forEach(d => FHIRDefs.add(d));
-  FHIRDefs.addPackageJson(loadedPackage.package, loadedPackage.packageJson);
-  FHIRDefs.package = loadedPackage.package;
+  merge(loadedPackage, FHIRDefs);
   log('info', `Loaded package ${fullPackageName}`);
   return FHIRDefs;
 }
@@ -379,11 +377,17 @@ export function cleanCachedPackage(packageDirectory: string): void {
   }
 }
 
+export function merge(pkg: LoadedPackage, defs: FHIRDefinitions): void {
+  pkg.defs.forEach(d => defs.add(d));
+  defs.addPackageJson(pkg.package, pkg.packageJson);
+  defs.package = pkg.package;
+}
+
 /**
  * Locates the targetPackage within the cachePath
  * @param {string} cachePath - The path to the directory containing cached packages
  * @param {string} targetPackage - The name of the package we are trying to load
- * @returns {FHIRDefinitions} loaded package definitions
+ * @returns {LoadedPackage} loaded package definitions
  */
 export function loadFromPath(cachePath: string, targetPackage: string): LoadedPackage {
   if (PackageCache.contains(targetPackage)) {
