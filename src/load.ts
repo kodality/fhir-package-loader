@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 import { maxSatisfying } from 'semver';
-import tar from 'tar';
+import tar, {Pack} from 'tar';
 import temp from 'temp';
 import {
   PackageLoadError,
@@ -15,6 +15,38 @@ import { axiosGet } from './utils/axiosUtils';
 import { getCustomRegistry } from './utils/customRegistry';
 import { AxiosResponse } from 'axios';
 import { LatestVersionUnavailableError } from './errors/LatestVersionUnavailableError';
+
+class PackageCache {
+  public static lastCurrentUpdate: Date;
+  private static cache: {[pkg: string]: LoadedPackage} = {};
+
+  public static isCurrentPackageRefreshNeeded(): boolean {
+    return !PackageCache.lastCurrentUpdate || PackageCache.lastCurrentUpdate.getTime() - new Date().getTime() > 86400000;
+  }
+
+  public static markCurrentPackageRefreshed(): void {
+    this.lastCurrentUpdate = new Date();
+  }
+
+  static contains(pkg: string): boolean {
+    return !!this.cache[pkg];
+  };
+
+  static get(pkg: string): LoadedPackage {
+    return this.cache[pkg];
+  };
+
+  static put(pkg: string, loadedPackage: LoadedPackage): void {
+    this.cache[pkg] = loadedPackage;
+  };
+
+}
+
+class LoadedPackage {
+  package: string;
+  defs: any[] = [];
+  packageJson: any;
+}
 
 async function getDistUrl(registry: string, packageName: string, version: string): Promise<string> {
   const cleanedRegistry = registry.replace(/\/$/, '');
@@ -141,11 +173,11 @@ export async function mergeDependency(
   }
   let fullPackageName = `${packageName}#${version}`;
   const loadPath = path.join(cachePath, fullPackageName, 'package');
-  let loadedPackage: string;
+  let loadedPackage: LoadedPackage;
 
   // First, try to load the package from the local cache
   log('info', `Checking ${cachePath} for ${fullPackageName}...`);
-  loadedPackage = loadFromPath(cachePath, fullPackageName, FHIRDefs);
+  loadedPackage = loadFromPath(cachePath, fullPackageName);
   if (loadedPackage) {
     log('info', `Found ${fullPackageName} in ${cachePath}.`);
   } else {
@@ -161,7 +193,7 @@ export async function mergeDependency(
     );
     version = 'current';
     fullPackageName = `${packageName}#${version}`;
-    loadedPackage = loadFromPath(cachePath, fullPackageName, FHIRDefs);
+    loadedPackage = loadFromPath(cachePath, fullPackageName);
   }
 
   let packageUrl;
@@ -176,71 +208,74 @@ export async function mergeDependency(
       );
     }
   } else if (/^current(\$.+)?$/.test(version)) {
-    // Authors can reference a specific CI branch by specifying version as current${branchname} (e.g., current$mybranch)
-    // See: https://chat.fhir.org/#narrow/stream/179166-implementers/topic/Package.20cache.20-.20multiple.20dev.20versions/near/291131585
-    let branch: string;
-    if (version.indexOf('$') !== -1) {
-      branch = version.slice(version.indexOf('$') + 1);
-    }
+    if (PackageCache.isCurrentPackageRefreshNeeded()) {
+      PackageCache.markCurrentPackageRefreshed();
+      // Authors can reference a specific CI branch by specifying version as current${branchname} (e.g., current$mybranch)
+      // See: https://chat.fhir.org/#narrow/stream/179166-implementers/topic/Package.20cache.20-.20multiple.20dev.20versions/near/291131585
+      let branch: string;
+      if (version.indexOf('$') !== -1) {
+        branch = version.slice(version.indexOf('$') + 1);
+      }
 
-    // Even if a local current package is loaded, we must still check that the local package date matches
-    // the date on the most recent version on build.fhir.org. If the date does not match, we re-download to the cache
-    type QAEntry = { 'package-id': string; date: string; repo: string };
-    const baseUrl = 'https://build.fhir.org/ig';
-    const res = await axiosGet(`${baseUrl}/qas.json`);
-    const qaData: QAEntry[] = res?.data;
-    // Find matching packages and sort by date to get the most recent
-    let newestPackage: QAEntry;
-    if (qaData?.length > 0) {
-      let matchingPackages = qaData.filter(p => p['package-id'] === packageName);
-      if (branch == null) {
-        matchingPackages = matchingPackages.filter(p => p.repo.match(/\/(master|main)\/qa\.json$/));
-      } else {
-        matchingPackages = matchingPackages.filter(p => p.repo.endsWith(`/${branch}/qa.json`));
+      // Even if a local current package is loaded, we must still check that the local package date matches
+      // the date on the most recent version on build.fhir.org. If the date does not match, we re-download to the cache
+      type QAEntry = {'package-id': string; date: string; repo: string};
+      const baseUrl = 'https://build.fhir.org/ig';
+      const res = await axiosGet(`${baseUrl}/qas.json`);
+      const qaData: QAEntry[] = res?.data;
+      // Find matching packages and sort by date to get the most recent
+      let newestPackage: QAEntry;
+      if (qaData?.length > 0) {
+        let matchingPackages = qaData.filter(p => p['package-id'] === packageName);
+        if (branch == null) {
+          matchingPackages = matchingPackages.filter(p => p.repo.match(/\/(master|main)\/qa\.json$/));
+        } else {
+          matchingPackages = matchingPackages.filter(p => p.repo.endsWith(`/${branch}/qa.json`));
+        }
+        newestPackage = matchingPackages.sort((p1, p2) => {
+          return Date.parse(p2['date']) - Date.parse(p1['date']);
+        })[0];
       }
-      newestPackage = matchingPackages.sort((p1, p2) => {
-        return Date.parse(p2['date']) - Date.parse(p1['date']);
-      })[0];
-    }
-    if (newestPackage?.repo) {
-      const packagePath = newestPackage.repo.slice(0, -8); // remove "/qa.json" from end
-      const igUrl = `${baseUrl}/${packagePath}`;
-      // get the package.manifest.json for the newest version of the package on build.fhir.org
-      const manifest = await axiosGet(`${igUrl}/package.manifest.json`);
-      let cachedPackageJSON;
-      if (fs.existsSync(path.join(loadPath, 'package.json'))) {
-        cachedPackageJSON = fs.readJSONSync(path.join(loadPath, 'package.json'));
-      }
-      // if the date on the package.manifest.json does not match the date on the cached package
-      // set the packageUrl to trigger a re-download of the package
-      if (manifest?.data?.date !== cachedPackageJSON?.date) {
-        packageUrl = `${igUrl}/package.tgz`;
-        if (cachedPackageJSON) {
+      if (newestPackage?.repo) {
+        const packagePath = newestPackage.repo.slice(0, -8); // remove "/qa.json" from end
+        const igUrl = `${baseUrl}/${packagePath}`;
+        // get the package.manifest.json for the newest version of the package on build.fhir.org
+        const manifest = await axiosGet(`${igUrl}/package.manifest.json`);
+        let cachedPackageJSON;
+        if (fs.existsSync(path.join(loadPath, 'package.json'))) {
+          cachedPackageJSON = fs.readJSONSync(path.join(loadPath, 'package.json'));
+        }
+        // if the date on the package.manifest.json does not match the date on the cached package
+        // set the packageUrl to trigger a re-download of the package
+        if (manifest?.data?.date !== cachedPackageJSON?.date) {
+          packageUrl = `${igUrl}/package.tgz`;
+          if (cachedPackageJSON) {
+            log(
+              'debug',
+              `Cached package date for ${fullPackageName} (${formatDate(
+                cachedPackageJSON.date
+              )}) does not match last build date on build.fhir.org (${formatDate(
+                manifest?.data?.date
+              )})`
+            );
+            log(
+              'info',
+              `Cached package ${fullPackageName} is out of date and will be replaced by the more recent version found on build.fhir.org.`
+            );
+          }
+        } else {
           log(
             'debug',
             `Cached package date for ${fullPackageName} (${formatDate(
               cachedPackageJSON.date
-            )}) does not match last build date on build.fhir.org (${formatDate(
+            )}) matches last build date on build.fhir.org (${formatDate(
               manifest?.data?.date
-            )})`
-          );
-          log(
-            'info',
-            `Cached package ${fullPackageName} is out of date and will be replaced by the more recent version found on build.fhir.org.`
+            )}), so the cached package will be used`
           );
         }
       } else {
-        log(
-          'debug',
-          `Cached package date for ${fullPackageName} (${formatDate(
-            cachedPackageJSON.date
-          )}) matches last build date on build.fhir.org (${formatDate(
-            manifest?.data?.date
-          )}), so the cached package will be used`
-        );
+        throw new CurrentPackageLoadError(fullPackageName);
       }
-    } else {
-      throw new CurrentPackageLoadError(fullPackageName);
     }
   } else if (!loadedPackage) {
     const customRegistry = getCustomRegistry(log);
@@ -280,7 +315,7 @@ export async function mergeDependency(
         }
         fs.moveSync(tempDirectory, targetDirectory);
         // Now try to load again from the path
-        loadedPackage = loadFromPath(cachePath, fullPackageName, FHIRDefs);
+        loadedPackage = loadFromPath(cachePath, fullPackageName);
       } else {
         log('info', `Unable to download most current version of ${fullPackageName}`);
       }
@@ -308,6 +343,10 @@ export async function mergeDependency(
     // If we fail again, then we couldn't get the package locally or from online
     throw new PackageLoadError(fullPackageName, getCustomRegistry());
   }
+
+  loadedPackage.defs.forEach(d => FHIRDefs.add(d));
+  FHIRDefs.addPackageJson(loadedPackage.package, loadedPackage.packageJson);
+  FHIRDefs.package = loadedPackage.package;
   log('info', `Loaded package ${fullPackageName}`);
   return FHIRDefs;
 }
@@ -337,50 +376,36 @@ export function cleanCachedPackage(packageDirectory: string): void {
 }
 
 /**
- * Locates the targetPackage within the cachePath and loads the set of JSON files into FHIRDefs
+ * Locates the targetPackage within the cachePath
  * @param {string} cachePath - The path to the directory containing cached packages
  * @param {string} targetPackage - The name of the package we are trying to load
- * @param {FHIRDefinitions} FHIRDefs - The FHIRDefinitions object to load defs into
- * @returns {string} the name of the loaded package if successful
+ * @returns {FHIRDefinitions} loaded package definitions
  */
 export function loadFromPath(
   cachePath: string,
-  targetPackage: string,
-  FHIRDefs: FHIRDefinitions
-): string {
-  const originalSize = FHIRDefs.size();
+  targetPackage: string
+): LoadedPackage {
+  if (PackageCache.contains(targetPackage)) {
+    return PackageCache.get(targetPackage);
+  }
   const packages = fs.existsSync(cachePath) ? fs.readdirSync(cachePath) : [];
   const cachedPackage = packages.find(packageName => packageName.toLowerCase() === targetPackage);
-  if (cachedPackage) {
-    const files = fs.readdirSync(path.join(cachePath, cachedPackage, 'package'));
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const def = JSON.parse(
-          fs.readFileSync(path.join(cachePath, cachedPackage, 'package', file), 'utf-8').trim()
-        );
-        FHIRDefs.add(def);
-        if (file === 'package.json') {
-          FHIRDefs.addPackageJson(targetPackage, def);
-        }
+  if (!cachedPackage) {
+    return null;
+  }
+  const result = new LoadedPackage();
+  result.package = targetPackage;
+  fs.readdirSync(path.join(cachePath, cachedPackage, 'package'))
+    .filter(file => file.endsWith('.json'))
+    .forEach(file => {
+      const def = JSON.parse(fs.readFileSync(path.join(cachePath, cachedPackage, 'package', file), 'utf-8').trim());
+      result.defs.push(def);
+      if (file === 'package.json') {
+        result.packageJson = def;
       }
-    }
-  }
-  // If we did successfully load definitions, mark this package as loaded
-  if (FHIRDefs.size() > originalSize) {
-    FHIRDefs.package = targetPackage;
-    return targetPackage;
-  }
-  // If the package has already been loaded, just return the targetPackage string
-  if (FHIRDefs.package === targetPackage) {
-    return targetPackage;
-  }
-  // This last case is to ensure SUSHI (which uses a single FHIRDefinitions class for many packages)
-  // can tell if a package has already be loaded. We don't have access to the array of package names
-  // that SUSHI keeps track of, so we check for the package.json of the targetPackage. If it's there,
-  // the package has already been loaded, so just return the targetPackage string.
-  if (FHIRDefs.getPackageJson(targetPackage)) {
-    return targetPackage;
-  }
+    });
+  PackageCache.put(targetPackage, result);
+  return result;
 }
 
 export async function lookUpLatestVersion(
